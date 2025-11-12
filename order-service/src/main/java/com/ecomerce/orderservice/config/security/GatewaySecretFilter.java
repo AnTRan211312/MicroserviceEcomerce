@@ -1,0 +1,86 @@
+package com.ecomerce.orderservice.config.security;
+
+import jakarta.servlet.*;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.annotation.Order;
+import org.springframework.stereotype.Component;
+
+import java.io.IOException;
+import java.util.List;
+
+@Slf4j
+@Component
+@Order(1)
+@RequiredArgsConstructor
+public class GatewaySecretFilter implements Filter {
+
+    @Value("${gateway.secret}")
+    private String gatewaySecret;
+
+    private final CustomAuthenticationEntryPoint authenticationEntryPoint;
+
+    private static final String GATEWAY_SECRET_HEADER = "X-Gateway-Secret";
+
+    private static final List<String> SKIP_PATHS = List.of(
+            "/actuator/health",
+            "/v3/api-docs",
+            "/swagger-ui",
+            "/swagger-resources",
+            "/webjars/"
+    );
+
+    @Override
+    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
+            throws IOException, ServletException {
+
+        HttpServletRequest httpRequest = (HttpServletRequest) request;
+        HttpServletResponse httpResponse = (HttpServletResponse) response;
+
+        String requestURI = httpRequest.getRequestURI();
+        String method = httpRequest.getMethod();
+
+        if (shouldSkipValidation(requestURI)) {
+            log.debug("Skipping gateway secret validation for: {} {}", method, requestURI);
+            chain.doFilter(request, response);
+            return;
+        }
+
+        String headerSecret = httpRequest.getHeader(GATEWAY_SECRET_HEADER);
+
+        if (headerSecret == null) {
+            log.warn("⚠️ Missing gateway secret - Direct access attempt from IP: {}, URI: {} {}",
+                    httpRequest.getRemoteAddr(), method, requestURI);
+            authenticationEntryPoint.sendUnauthorizedResponse(httpResponse, "Truy cập trực tiếp không được phép. Vui lòng sử dụng API Gateway.");
+            return;
+        }
+
+        if (!gatewaySecret.equals(headerSecret)) {
+            log.warn("⚠️ Invalid gateway secret from IP: {}, URI: {} {}",
+                    httpRequest.getRemoteAddr(), method, requestURI);
+            authenticationEntryPoint.sendUnauthorizedResponse(httpResponse, "Invalid gateway secret");
+            return;
+        }
+
+        log.debug("✅ Valid gateway secret for: {} {}", method, requestURI);
+        chain.doFilter(request, response);
+    }
+
+    private boolean shouldSkipValidation(String uri) {
+        return SKIP_PATHS.stream().anyMatch(uri::startsWith);
+    }
+
+    @Override
+    public void init(FilterConfig filterConfig) throws ServletException {
+        log.info("✅ GatewaySecretFilter initialized");
+    }
+
+    @Override
+    public void destroy() {
+        log.info("✅ GatewaySecretFilter destroyed");
+    }
+}
+
